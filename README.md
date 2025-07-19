@@ -1,70 +1,138 @@
-# Getting Started with Create React App
+# ♠️ Spar Card Game
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+A real-time multiplayer card game built with **React** and **Firebase**, supporting anonymous user authentication, Firestore-based game state sync, and a simple chat system.
 
-## Available Scripts
+![screenshot](screenshot.png) 
 
-In the project directory, you can run:
+## 🔗 Live Demo
 
-### `npm start`
+Play it here: [https://spar-84a09.web.app](https://spar-84a09.web.app)
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+---
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## 🚀 Features
 
-### `npm test`
+- 🃏 Real-time multiplayer card gameplay (2–7 players)
+- 👻 Anonymous user login (no sign-up required)
+- 🔥 Firebase Firestore for live game sync
+- 💬 In-room chat support
+- 🎯 Score tracking and round-based gameplay
+- ✅ Game reset and room leave options
+- 🎨 Responsive, modern UI with card animations
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+---
 
-### `npm run build`
+## 📸 Preview
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+<!-- Add image links if you want -->
+- Lobby: player name, room creation/join
+- Game board: player hands, trick area, chat
+- Game flow: dealing, playing cards, scoring
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+---
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+## 🛠 Tech Stack
 
-### `npm run eject`
+- **Frontend**: React (with Hooks)
+- **Backend**: Firebase Firestore + Firebase Auth
+- **Hosting**: Firebase Hosting
+- **Style**: Tailwind CSS (utility-first styling)
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+---
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+## ⚙️ Setup & Installation
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+### 1. Clone the repo
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+```bash
+git clone https://github.com/your-username/spar-card-game.git
+cd spar-card-game
+```
 
-## Learn More
+### 2. Install dependencies
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+```bash
+npm install
+```
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+### 3. Firebase Setup
 
-### Code Splitting
+- Create a Firebase project at firebase.google.com
+- Enable Anonymous Auth in Authentication
+- Set up Firestore (in test mode for development)
+- Enable Firebase Hosting
+- Replace firebaseConfig in App.js with your actual config:
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+```js
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_DOMAIN",
+  projectId: "YOUR_PROJECT_ID",
+  // etc.
+};
+```
 
-### Analyzing the Bundle Size
+### 4. Start the dev server
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+```bash
+npm start
+```
 
-### Making a Progressive Web App
+## 🌐 Deploy to Firebase
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+**One-time setup:**
 
-### Advanced Configuration
+```bash
+npm install -g firebase-tools
+firebase login
+firebase init hosting
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+**Deploy:**
 
-### Deployment
+```bash
+npm run build
+firebase deploy
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+## 🔐 Firestore Rules (Recommended for Production)
 
-### `npm run build` fails to minify
+```js
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /artifacts/{appId}/public/data/sparRooms/{roomId} {
+      allow read, write: if request.auth != null;
+    }
+    match /artifacts/{appId}/public/data/sparRooms/{roomId}/chatMessages/{msgId} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+## 🧩 Folder Structure
+
+```bash
+/public         - Static assets
+/src/App.js     - Main app logic
+/firebase.json  - Hosting + SPA config
+.firebaserc     - Project alias
+```
+
+## 🧠 Known Issues / To-Do
+
+- [ ] Responsive tweaks for small mobile screens
+- [ ] Game history or replay feature
+- [ ] Spectator mode
+- [ ] Better error handling for network drops
+
+## 📄 License
+
+MIT License. Feel free to fork, extend, or use for your own projects.
+
+## 🙌 Acknowledgments
+
+- Firebase team for powerful dev tools
+- Tailwind CSS for styling utilities
+- You, the player! ♠️♥️♣️♦️
