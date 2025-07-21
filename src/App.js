@@ -3,7 +3,6 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, query, where, addDoc, getDocs, deleteDoc } from 'firebase/firestore';
 
-// Global variables for Firebase configuration, provided by the Canvas environment
 // Using the user-provided Firebase configuration
 const appId = "1:940315975648:web:8ecef283a456ed7952d585"; // User's specific appId
 const firebaseConfig = {
@@ -128,6 +127,7 @@ function App() {
 
     const playerRef = useRef(null); // Ref to store player data for quick access
     const chatContainerRef = useRef(null); // Ref for scrolling chat messages
+    const lastTrickMessageRef = useRef('');
 
     // Firebase Authentication and User ID setup
     useEffect(() => {
@@ -154,6 +154,26 @@ function App() {
         // Cleanup subscription on unmount
         return () => unsubscribe();
     }, []);
+
+    useEffect(() => {
+      if (!gameRoom?.lastTrickMessage) return;
+
+      // Only show if it's a new message
+      if (lastTrickMessageRef.current !== gameRoom.lastTrickMessage) {
+        lastTrickMessageRef.current = gameRoom.lastTrickMessage;
+
+        showMessageModal(gameRoom.lastTrickMessage);
+
+        // Optionally trigger new round if roundWinnerId is set
+        setTimeout(() => {
+          if (gameRoom.roundWinnerId) {
+            startNewRound(gameRoom.roundWinnerId);
+          }
+        }, 2000);
+      }
+    }, [gameRoom?.lastTrickMessage]);
+
+
 
     // Effect to set up real-time listener for the current game room
     useEffect(() => {
@@ -413,6 +433,7 @@ function App() {
 
     // Function to play a card
     const playCard = async (card) => {
+        
         if (!gameRoom || gameRoom.status !== 'playing' || gameRoom.currentPlayerId !== userId) {
             showMessageModal("It's not your turn or the game is not active.");
             return;
@@ -463,49 +484,51 @@ function App() {
 
                 // If it's the last trick (5th trick)
                 if (newTrickCount === 5) {
-                    const points = calculateScore(winningCard);
-                    const updatedPlayersAfterScoring = updatedPlayers.map(p =>
-                        p.id === winningPlayerId ? { ...p, score: p.score + points } : p
-                    );
-                    newRoundWinnerId = winningPlayerId;
-                    newLastTrickWinningCard = winningCard;
-                    newLastTrickWinnerId = winningPlayerId;
+                  const points = calculateScore(winningCard);
+                  const updatedPlayersAfterScoring = updatedPlayers.map(p =>
+                      p.id === winningPlayerId ? { ...p, score: p.score + points } : p
+                  );
 
-                    // Check for game end condition
-                    const gameWinner = updatedPlayersAfterScoring.find(p => p.score >= gameRoom.gameTargetScore);
-                    if (gameWinner) {
-                        newGameStatus = 'game_end';
-                        newGameWinnerId = gameWinner.id;
-                        showMessageModal(`${gameWinner.name} reached ${gameWinner.score} points and won the game!`);
-                    } else {
-                        newGameStatus = 'round_end';
-                        showMessageModal(`Round over! ${updatedPlayers.find(p => p.id === winningPlayerId)?.name} won the last trick with ${winningCard} and scored ${points} points.`);
-                    }
+                  newRoundWinnerId = winningPlayerId;
+                  newLastTrickWinningCard = winningCard;
+                  newLastTrickWinnerId = winningPlayerId;
 
-                    // Update game state for the next round or game end
-                    await updateDoc(doc(db, `artifacts/${appId}/public/data/sparRooms`, currentRoomId), {
-                        status: newGameStatus,
-                        players: updatedPlayersAfterScoring,
-                        currentTrick: [],
-                        leadSuit: null,
-                        trickCount: 0,
-                        currentPlayerId: newGameStatus === 'game_end' ? null : winningPlayerId, // Winner of round becomes dealer for next
-                        roundWinnerId: newRoundWinnerId,
-                        gameWinnerId: newGameWinnerId,
-                        lastTrickWinningCard: newLastTrickWinningCard,
-                        lastTrickWinnerId: newLastTrickWinnerId,
-                    });
+                  const gameWinner = updatedPlayersAfterScoring.find(p => p.score >= gameRoom.gameTargetScore);
+                  if (gameWinner) {
+                      newGameStatus = 'game_end';
+                      newGameWinnerId = gameWinner.id;
+                      showMessageModal(`${gameWinner.name} reached ${gameWinner.score} points and won the game!`);
+                  } else {
+                      newGameStatus = 'round_end';
+                      showMessageModal(`Round over! ${updatedPlayers.find(p => p.id === winningPlayerId)?.name} won the last trick with ${winningCard} and scored ${points} points.`);
+                  }
 
-                    // If game is not ended, automatically start a new round after a short delay
-                    if (newGameStatus !== 'game_end') {
-                        setTimeout(() => {
-                            // Wait a moment longer to ensure Firestore syncs updated scores
-                            // and `gameRoom` has the latest state in the next render
-                            startNewRound(newRoundWinnerId);
-                        }, 4000);
-                    }
+                  const trickWinner = updatedPlayers.find(p => p.id === winningPlayerId);
+                  const winner = updatedPlayers.find(p => p.id === winningPlayerId);
+                  const winnerName = winner?.name || 'Someone';
+                  // ✅ Don't clear currentTrick yet — let it show in the UI
+                  await updateDoc(doc(db, `artifacts/${appId}/public/data/sparRooms`, currentRoomId), {
+                      status: newGameStatus,
+                      players: updatedPlayersAfterScoring,
+                      // Leave currentTrick alone so users can see the last play
+                      leadSuit: null,
+                      trickCount: 0,
+                      currentPlayerId: newGameStatus === 'game_end' ? null : winningPlayerId,
+                      roundWinnerId: newRoundWinnerId,
+                      gameWinnerId: newGameWinnerId,
+                      lastTrickWinningCard: newLastTrickWinningCard,
+                      lastTrickWinnerId: newLastTrickWinnerId,
+                      lastTrickMessage: `${winnerName} won the trick with ${winningCard}`,
+                  });
+
+                  // ✅ After a delay, start the new round (which clears currentTrick)
+                  if (newGameStatus !== 'game_end') {
+                      setTimeout(() => startNewRound(newRoundWinnerId), 3000); // 3 sec delay to show the trick
+                  }
 
                 } else {
+                    const winner = updatedPlayers.find(p => p.id === winningPlayerId);
+                    const winnerName = winner?.name || 'Someone';
                     // Trick complete, but not last trick of round
                     await updateDoc(doc(db, `artifacts/${appId}/public/data/sparRooms`, currentRoomId), {
                         players: updatedPlayers,
@@ -513,6 +536,7 @@ function App() {
                         leadSuit: null, // Reset lead suit
                         trickCount: newTrickCount,
                         currentPlayerId: nextPlayerId, // Winner of trick leads next
+                        lastTrickMessage: `${winnerName} won the trick with ${winningCard}`,
                     });
                 }
             } else {
@@ -705,7 +729,7 @@ function App() {
     };
 
     // Helper component for rendering a single card
-    const Card = ({ card, onClick, disabled, isPlayedCard = false }) => {
+    const Card = ({ card, onClick, disabled, isPlayedCard = false, className = '' }) => {
         const suit = getSuit(card);
         const rank = getCardRank(card);
         const isRed = suit === 'H' || suit === 'D';
@@ -713,18 +737,20 @@ function App() {
 
         return (
             <button
-                onClick={onClick}
-                disabled={disabled}
-                className={`
-                    bg-white text-gray-900 rounded-lg shadow-md text-center font-bold
-                    transform transition-transform duration-200 ease-in-out
-                    ${isPlayedCard ? 'w-24 h-32 p-2 text-3xl' : 'w-20 h-28 p-1 text-xl hover:scale-105'}
-                    ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100'}
-                    ${isRed ? 'text-red-600' : 'text-gray-900'}
-                    flex flex-col justify-between items-center
-                    border border-gray-400
-                `}
-            >
+              onClick={onClick}
+              disabled={disabled}
+              className={`
+                  bg-white text-gray-900 rounded-lg shadow-md text-center font-bold
+                  transform transition-transform duration-200 ease-in-out
+                  ${isPlayedCard ? 'w-24 h-32 p-2 text-3xl' : 'w-20 h-28 p-1 text-xl hover:scale-105'}
+                  ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100'}
+                  ${isRed ? 'text-red-600' : 'text-gray-900'}
+                  flex flex-col justify-between items-center
+                  border border-gray-400
+                  ${className} // ✅ apply extra styling here
+              `}
+          >
+
                 <span className="text-xl">{rank}</span>
                 <span className={`text-4xl ${isRed ? 'text-red-600' : 'text-gray-900'}`}>{suitSymbol}</span>
                 <span className="text-xl transform rotate-180">{rank}</span> {/* Flipped rank for top-right */}
@@ -855,20 +881,47 @@ function App() {
 
                         {/* Current Trick Area */}
                         <div className="bg-gray-700 p-5 rounded-lg shadow-inner mb-6 w-full max-w-xl min-h-[180px] flex flex-wrap justify-center items-center gap-4 border border-gray-600">
-                            {gameRoom?.currentTrick.length > 0 ? (
-                                gameRoom.currentTrick.map((playedCard, index) => (
-                                    <Card
-                                        key={index}
-                                        card={playedCard.card}
-                                        isPlayedCard={true}
-                                        onClick={() => {}} // No action on played cards
-                                        disabled={true}
-                                    />
-                                ))
-                            ) : (
-                                <p className="text-gray-400 text-lg">No cards played yet in this trick.</p>
-                            )}
+                          <div className="w-full flex flex-wrap justify-center gap-4">
+                            {
+                              (() => {
+                                // 🧠 Compute winning card before rendering
+                                let currentWinningCardId = null;
+                                if (gameRoom?.currentTrick?.length > 0 && gameRoom?.leadSuit) {
+                                  const { winningCard } = determineTrickWinner(gameRoom.currentTrick, gameRoom.leadSuit);
+                                  currentWinningCardId = winningCard;
+                                }
+
+                                // 🎴 If trick in progress, render cards
+                                if (gameRoom?.currentTrick?.length > 0) {
+                                  return gameRoom.currentTrick.map((playedCard, index) => {
+                                    const player = gameRoom.players.find(p => p.id === playedCard.playerId);
+                                    const isWinningCard = playedCard.card === currentWinningCardId;
+
+                                    return (
+                                      <div key={index} className="flex flex-col items-center">
+                                        <span className="text-sm text-gray-300 mb-1">{player?.name}</span>
+                                        <Card
+                                          card={playedCard.card}
+                                          isPlayedCard={true}
+                                          onClick={() => {}}
+                                          disabled={true}
+                                          className={isWinningCard ? 'ring-2 ring-yellow-400' : ''}
+                                        />
+                                      </div>
+                                    );
+                                  });
+                                }
+
+                                // 💤 No cards played yet
+                                return (
+                                  <p className="text-gray-400 text-lg">No cards played yet in this trick.</p>
+                                );
+                              })()
+                            }
+                          </div>
                         </div>
+
+
 
                         {/* Player Hand */}
                         {playerRef.current && playerRef.current.hand && (
