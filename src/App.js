@@ -23,12 +23,15 @@ const auth = getAuth(app);
 
 // Card suits and ranks for deck generation
 const SUITS = ['H', 'D', 'C', 'S']; // Hearts, Diamonds, Clubs, Spades
-const RANKS = ['A', 'K', 'Q', 'J', '10', '9', '8', '7', '6']; // Ace to 6
+const RANKS = ['K', 'Q', 'J', '10', '9', '8', '7', '6']; // King to 6, no Aces
 
 // Card rank values for comparison (higher value means higher rank)
 const CARD_RANK_VALUES = {
-    'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '7': 7, '6': 6
+    'K': 13, 'Q': 12, 'J': 11, '10': 10, '9': 9, '8': 8, '7': 7, '6': 6
 };
+
+// Dev toggle: set to true to force extra-card flow for the local player
+const DEV_FORCE_EXTRA_CARD = false; // Set to true to force extra card flow for testing
 
 // Map suit codes to Unicode symbols
 const SUIT_SYMBOLS = {
@@ -38,15 +41,11 @@ const SUIT_SYMBOLS = {
     'S': '♠'  // Spades
 };
 
-// Function to create a standard 35-card deck for Spar
+// Function to create a standard 32-card deck for Spar (no Aces)
 const createDeck = () => {
     let deck = [];
     for (let suit of SUITS) {
         for (let rank of RANKS) {
-            // Exclude Ace of Spades
-            if (rank === 'A' && suit === 'S') {
-                continue;
-            }
             deck.push(`${suit}${rank}`); // e.g., "H7", "SK"
         }
     }
@@ -103,8 +102,7 @@ const calculateScore = (winningCard) => {
         case '10':
         case 'J':
         case 'Q':
-        case 'K':
-        case 'A': return 1;
+        case 'K': return 1;
         default: return 0;
     }
 };
@@ -124,6 +122,8 @@ function App() {
     const [chatMessages, setChatMessages] = useState([]); // State for chat messages
     const [newChatMessage, setNewChatMessage] = useState(''); // State for new chat message input
     const [joinRoomIdInput, setJoinRoomIdInput] = useState('');
+    const [showExtraCardOption, setShowExtraCardOption] = useState(false); // State for extra card option
+    const [remainingDeck, setRemainingDeck] = useState([]); // State for remaining deck
 
     const playerRef = useRef(null); // Ref to store player data for quick access
     const chatContainerRef = useRef(null); // Ref for scrolling chat messages
@@ -188,6 +188,21 @@ function App() {
                     setGameRoom(roomData);
                     // Update playerRef for quick access to current player's data
                     playerRef.current = roomData.players.find(p => p.id === userId);
+                    
+                    // Check if current player needs to draw extra cards
+                    const currentPlayer = roomData.players.find(p => p.id === userId);
+                    if (roomData.status === 'waiting_extra_card' && currentPlayer) {
+                        const hasHighCard = currentPlayer.hand.some(card => CARD_RANK_VALUES[getCardRank(card)] >= 10);
+                        if (!hasHighCard) {
+                            setShowExtraCardOption(true);
+                            setRemainingDeck(roomData.remainingDeck || []);
+                        } else {
+                            setShowExtraCardOption(false);
+                        }
+                    } else {
+                        setShowExtraCardOption(false);
+                    }
+                    
                     // Handle game state changes and display messages
                     updateGameMessages(roomData);
                 } else {
@@ -248,6 +263,8 @@ function App() {
             if (roomData.players.length >= 2 && roomData.players[0].id === userId) {
                 setMessage(prev => prev + " You can start the game.");
             }
+        } else if (roomData.status === 'waiting_extra_card') {
+            setMessage("Waiting for players to finish drawing extra cards...");
         } else if (roomData.status === 'playing') {
             if (roomData.currentPlayerId === userId) {
                 setMessage("It's your turn!");
@@ -411,8 +428,37 @@ function App() {
             const firstPlayerIndex = (dealerIndex + 1) % numPlayers;
             const firstPlayerToLeadId = updatedPlayers[firstPlayerIndex].id;
 
+            // DEV: force current user's hand to be low-only to trigger extra-card UI
+            if (DEV_FORCE_EXTRA_CARD) {
+                const isLow = (card) => CARD_RANK_VALUES[getCardRank(card)] < 10;
+                const lowsFromDeck = [];
+                // Pull lows from the back of deck until we have 5, keeping order consistent
+                while (deck.length && lowsFromDeck.length < 5) {
+                    const c = deck.pop();
+                    if (isLow(c)) lowsFromDeck.push(c); else deck.unshift(c);
+                }
+                // If not enough lows gathered, fill from any remaining to keep hand size 5
+                while (lowsFromDeck.length < 5 && deck.length) {
+                    lowsFromDeck.push(deck.pop());
+                }
+                const userIdx = updatedPlayers.findIndex(p => p.id === userId);
+                if (userIdx !== -1) {
+                    // Return the user's originally dealt cards to the deck then assign forced hand
+                    const original = updatedPlayers[userIdx].hand;
+                    deck.push(...original);
+                    updatedPlayers[userIdx] = { ...updatedPlayers[userIdx], hand: lowsFromDeck };
+                }
+            }
+
+            // Check if any player has all cards less than 10
+            const playersNeedingExtraCards = updatedPlayers.filter(player => 
+                !player.hand.some(card => CARD_RANK_VALUES[getCardRank(card)] >= 10)
+            );
+            
+            const gameStatus = playersNeedingExtraCards.length > 0 ? 'waiting_extra_card' : 'playing';
+            
             await updateDoc(doc(db, `artifacts/${appId}/public/data/sparRooms`, currentRoomId), {
-                status: 'playing',
+                status: gameStatus,
                 players: updatedPlayers,
                 currentTrick: [],
                 leadSuit: null,
@@ -421,8 +467,21 @@ function App() {
                 roundWinnerId: null,
                 lastTrickWinningCard: null,
                 lastTrickWinnerId: null,
+                remainingDeck: deck, // Store remaining deck for extra card draws
             });
-            setMessage("Game started! Cards dealt.");
+
+            const currentPlayer = updatedPlayers.find(p => p.id === userId);
+            const currentPlayerNeedsCards = !currentPlayer?.hand.some(card => CARD_RANK_VALUES[getCardRank(card)] >= 10);
+            
+            if (gameStatus === 'playing') {
+                setMessage("Game started! Cards dealt.");
+            } else if (currentPlayerNeedsCards) {
+                setShowExtraCardOption(true);
+                setRemainingDeck(deck);
+                setMessage("All your cards are less than 10. You may draw extra cards until you get a 10 or higher.");
+            } else {
+                setMessage("Waiting for other players to finish drawing extra cards...");
+            }
         } catch (error) {
             console.error("Error starting game:", error);
             showMessageModal("Failed to start game. Please try again.");
@@ -602,8 +661,34 @@ function App() {
         const firstPlayerIndex = (dealerIndex + 1) % numPlayers;
         const firstPlayerToLeadId = updatedPlayers[firstPlayerIndex].id;
 
+        // DEV: force current user's hand to be low-only to trigger extra-card UI
+        if (DEV_FORCE_EXTRA_CARD) {
+            const isLow = (card) => CARD_RANK_VALUES[getCardRank(card)] < 10;
+            const lowsFromDeck = [];
+            while (deck.length && lowsFromDeck.length < 5) {
+                const c = deck.pop();
+                if (isLow(c)) lowsFromDeck.push(c); else deck.unshift(c);
+            }
+            while (lowsFromDeck.length < 5 && deck.length) {
+                lowsFromDeck.push(deck.pop());
+            }
+            const userIdx = updatedPlayers.findIndex(p => p.id === userId);
+            if (userIdx !== -1) {
+                const original = updatedPlayers[userIdx].hand;
+                deck.push(...original);
+                updatedPlayers[userIdx] = { ...updatedPlayers[userIdx], hand: lowsFromDeck };
+            }
+        }
+
+        // Check if any player has all cards less than 10
+        const playersNeedingExtraCards = updatedPlayers.filter(player =>
+            !player.hand.some(card => CARD_RANK_VALUES[getCardRank(card)] >= 10)
+        );
+
+        const gameStatus = playersNeedingExtraCards.length > 0 ? 'waiting_extra_card' : 'playing';
+
         await updateDoc(roomDocRef, {
-            status: 'playing',
+            status: gameStatus,
             players: updatedPlayers,
             dealerId: newDealerId,
             currentPlayerId: firstPlayerToLeadId,
@@ -613,9 +698,21 @@ function App() {
             roundWinnerId: null,
             lastTrickWinningCard: null,
             lastTrickWinnerId: null,
+            remainingDeck: deck, // Store remaining deck for new round (and extra draws)
         });
 
-        setMessage("New round started! Cards dealt.");
+        const currentPlayer = updatedPlayers.find(p => p.id === userId);
+        const currentPlayerNeedsCards = !currentPlayer?.hand.some(card => CARD_RANK_VALUES[getCardRank(card)] >= 10);
+        
+        if (gameStatus === 'playing') {
+            setMessage("New round started! Cards dealt.");
+        } else if (currentPlayerNeedsCards) {
+            setShowExtraCardOption(true);
+            setRemainingDeck(deck);
+            setMessage("All your cards are less than 10. You may draw extra cards until you get a 10 or higher.");
+        } else {
+            setMessage("New round: waiting for other players to finish drawing extra cards...");
+        }
     } catch (error) {
         console.error("Error starting new round:", error);
         showMessageModal("Failed to start new round. Please try again.");
@@ -648,6 +745,7 @@ function App() {
                 lastTrickWinningCard: null,
                 lastTrickWinnerId: null,
                 gameTargetScore: 10, // Reset target score to default
+                remainingDeck: [], // Reset remaining deck
             });
             setMessage("Game reset. Waiting for players to start a new game.");
         } catch (error) {
@@ -728,6 +826,189 @@ function App() {
         }
     };
 
+    // Function to draw an extra card when all cards are less than 10
+    const drawExtraCard = async () => {
+        if (!gameRoom || !remainingDeck.length) {
+            showMessageModal("No more cards available to draw.");
+            return;
+        }
+
+        setIsLoading(true);
+        try {
+            const roomDocRef = doc(db, `artifacts/${appId}/public/data/sparRooms`, currentRoomId);
+            const docSnap = await getDoc(roomDocRef);
+            
+            if (!docSnap.exists()) {
+                showMessageModal("Room no longer exists.");
+                return;
+            }
+
+            const latestRoomData = docSnap.data();
+            const newDeck = [...latestRoomData.remainingDeck];
+            
+            if (newDeck.length === 0) {
+                showMessageModal("No more cards available to draw.");
+                return;
+            }
+
+            // Announce that this player is drawing (do not reveal cards)
+            try {
+                const chatCollectionRef = collection(db, `artifacts/${appId}/public/data/sparRooms/${currentRoomId}/chatMessages`);
+                const playerBeforeDraw = latestRoomData.players.find(p => p.id === userId);
+                const drawingPlayerName = playerBeforeDraw?.name || `User-${userId.substring(0, 4)}`;
+                await addDoc(chatCollectionRef, {
+                    senderId: 'system',
+                    senderName: 'System',
+                    message: `${drawingPlayerName} is drawing an extra card...`,
+                    timestamp: Date.now(),
+                });
+            } catch (_) { /* ignore chat errors */ }
+
+            // Draw a card from the remaining deck
+            const drawnCard = newDeck.pop();
+
+            // Helper to sort ascending by rank value
+            const sortAscByRank = (hand) => hand.slice().sort((a, b) => CARD_RANK_VALUES[getCardRank(a)] - CARD_RANK_VALUES[getCardRank(b)]);
+
+            // Player before draw
+            const playerBeforeDraw = latestRoomData.players.find(p => p.id === userId);
+            const originalHand = [...(playerBeforeDraw?.hand || [])];
+
+            // How many cards must be discarded to ensure final hand size is 5 after adding one card
+            const discardsNeeded = Math.max(0, (originalHand.length + 1) - 5);
+            let keptHand = [...originalHand];
+            let discardedCards = [];
+            if (discardsNeeded > 0 && keptHand.length > 0) {
+                const asc = sortAscByRank(keptHand);
+                discardedCards = asc.slice(0, Math.min(discardsNeeded, asc.length));
+                // Remove those from keptHand
+                const discardSet = new Set(discardedCards);
+                keptHand = keptHand.filter(c => !discardSet.has(c));
+            }
+
+            // Build new hand by adding the drawn card
+            const newHand = keptHand.concat([drawnCard]);
+
+            // If still above 5 due to edge cases, trim again conservatively
+            while (newHand.length > 5) {
+                // remove lowest
+                let lowestIdx = 0;
+                let lowestVal = CARD_RANK_VALUES[getCardRank(newHand[0])];
+                for (let i = 1; i < newHand.length; i++) {
+                    const v = CARD_RANK_VALUES[getCardRank(newHand[i])];
+                    if (v < lowestVal) { lowestVal = v; lowestIdx = i; }
+                }
+                discardedCards.push(newHand[lowestIdx]);
+                newHand.splice(lowestIdx, 1);
+            }
+
+            // Update players with the new hand for the drawing player
+            const updatedPlayers = latestRoomData.players.map(p => 
+                p.id === userId ? { ...p, hand: newHand } : p
+            );
+
+            // Check if the drawn card gives the player a high card
+            const hasHighCardNow = newHand.some(card => CARD_RANK_VALUES[getCardRank(card)] >= 10);
+
+            // Check if all players now have at least one card 10 or higher
+            const allPlayersHaveHighCards = updatedPlayers.every(player => 
+                player.hand.some(card => CARD_RANK_VALUES[getCardRank(card)] >= 10)
+            );
+
+            await updateDoc(roomDocRef, {
+                players: updatedPlayers,
+                remainingDeck: newDeck,
+                status: allPlayersHaveHighCards ? 'playing' : 'waiting_extra_card',
+            });
+
+            // Inform everyone via chat (generic)
+            try {
+                const chatCollectionRef = collection(db, `artifacts/${appId}/public/data/sparRooms/${currentRoomId}/chatMessages`);
+                const drawingPlayer = updatedPlayers.find(p => p.id === userId);
+                const drawingPlayerName = drawingPlayer?.name || `User-${userId.substring(0, 4)}`;
+                const msg = discardedCards.length > 0
+                    ? `${drawingPlayerName} drew an extra card and discarded ${discardedCards.length} card${discardedCards.length > 1 ? 's' : ''}.`
+                    : `${drawingPlayerName} drew an extra card.`;
+                await addDoc(chatCollectionRef, {
+                    senderId: 'system',
+                    senderName: 'System',
+                    message: msg,
+                    timestamp: Date.now(),
+                });
+            } catch (_) { /* ignore chat errors */ }
+
+            if (hasHighCardNow) {
+                setShowExtraCardOption(false);
+                if (allPlayersHaveHighCards) {
+                    setMessage("All players have high cards! Game can now begin.");
+                    showMessageModal(`You drew ${drawnCard}! All players now have cards 10 or higher.`);
+                } else {
+                    setMessage("You drew a high card! Waiting for other players...");
+                    showMessageModal(`You drew ${drawnCard}! You now have a card 10 or higher.`);
+                }
+            } else {
+                showMessageModal(`You drew ${drawnCard}. Still no high cards - you can draw again.`);
+            }
+            
+            setRemainingDeck(newDeck);
+        } catch (error) {
+            console.error("Error drawing extra card:", error);
+            showMessageModal("Failed to draw card. Please try again.");
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    // Function to skip drawing extra cards
+    const skipExtraCard = async () => {
+        setIsLoading(true);
+        try {
+            const roomDocRef = doc(db, `artifacts/${appId}/public/data/sparRooms`, currentRoomId);
+            const docSnap = await getDoc(roomDocRef);
+            
+            if (!docSnap.exists()) {
+                showMessageModal("Room no longer exists.");
+                return;
+            }
+
+            const latestRoomData = docSnap.data();
+            const localPlayer = latestRoomData.players.find(p => p.id === userId);
+            const drawingPlayerName = localPlayer?.name || `User-${userId.substring(0, 4)}`;
+            
+            // Check if all players have at least one high card after this player skips
+            const allPlayersHaveHighCards = latestRoomData.players.every(player => 
+                player.hand.some(card => CARD_RANK_VALUES[getCardRank(card)] >= 10)
+            );
+            
+            await updateDoc(roomDocRef, {
+                status: allPlayersHaveHighCards ? 'playing' : 'waiting_extra_card',
+            });
+            setShowExtraCardOption(false);
+
+            // Notify room via system chat
+            try {
+                const chatCollectionRef = collection(db, `artifacts/${appId}/public/data/sparRooms/${currentRoomId}/chatMessages`);
+                await addDoc(chatCollectionRef, {
+                    senderId: 'system',
+                    senderName: 'System',
+                    message: `${drawingPlayerName} skipped drawing.`,
+                    timestamp: Date.now(),
+                });
+            } catch (_) { /* ignore chat errors */ }
+            
+            if (allPlayersHaveHighCards) {
+                setMessage("All players ready! Game can now begin.");
+            } else {
+                setMessage("You skipped drawing cards. Waiting for other players...");
+            }
+        } catch (error) {
+            console.error("Error skipping extra card:", error);
+            showMessageModal("Failed to skip extra card option.");
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
     // Helper component for rendering a single card
     const Card = ({ card, onClick, disabled, isPlayedCard = false, className = '' }) => {
         const suit = getSuit(card);
@@ -747,13 +1028,12 @@ function App() {
                   ${isRed ? 'text-red-600' : 'text-gray-900'}
                   flex flex-col justify-between items-center
                   border border-gray-400
-                  ${className} // ✅ apply extra styling here
+                  ${className}
               `}
-          >
-
+            >
                 <span className="text-xl">{rank}</span>
                 <span className={`text-4xl ${isRed ? 'text-red-600' : 'text-gray-900'}`}>{suitSymbol}</span>
-                <span className="text-xl transform rotate-180">{rank}</span> {/* Flipped rank for top-right */}
+                <span className="text-xl transform rotate-180">{rank}</span>
             </button>
         );
     };
@@ -947,6 +1227,32 @@ function App() {
                                             disabled={gameRoom.currentPlayerId !== userId || gameRoom.status !== 'playing'}
                                         />
                                     ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Extra Card Option */}
+                        {showExtraCardOption && (
+                            <div className="bg-red-700 p-4 rounded-lg shadow-inner mb-6 w-full max-w-xl border border-red-600">
+                                <h3 className="text-xl font-bold mb-3 text-center text-red-300">All Your Cards Are Less Than 10!</h3>
+                                <p className="text-center text-gray-200 mb-4">
+                                    You can draw extra cards from the remaining deck until you get a 10 or higher card.
+                                </p>
+                                <div className="flex justify-center gap-4">
+                                    <button
+                                        onClick={drawExtraCard}
+                                        disabled={isLoading}
+                                        className="bg-orange-600 hover:bg-orange-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300 ease-in-out transform hover:scale-105 shadow-md disabled:opacity-50"
+                                    >
+                                        Draw Extra Card
+                                    </button>
+                                    <button
+                                        onClick={skipExtraCard}
+                                        disabled={isLoading}
+                                        className="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300 ease-in-out transform hover:scale-105 shadow-md disabled:opacity-50"
+                                    >
+                                        Skip & Continue
+                                    </button>
                                 </div>
                             </div>
                         )}
